@@ -1,0 +1,17 @@
+{
+  "testOutputDir": "tests/e2e",
+  "sourceDir": "src",
+  "framework": "react",
+  "serverPort": 3333,
+  "namingStrategy": {
+    "type": "component-action"
+  },
+  "autoGenerateTests": false,
+  "preserveFormatting": true,
+  "backupBeforeModify": true,
+  "maxSessionRetention": 10,
+  "playwright": {
+    "baseURL": "http://localhost:5173",
+    "timeout": 30000
+  }
+}

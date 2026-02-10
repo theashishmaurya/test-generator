@@ -1,0 +1,25 @@
+node_modules/
+dist/
+.qa-automation/
+.qa-backup/
+*.tsbuildinfo
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.local
+
+# Example app
+example-app/node_modules/
+example-app/dist/
+
+# Chrome extension build artifacts
+chrome-extension/*.crx
+chrome-extension/*.pem

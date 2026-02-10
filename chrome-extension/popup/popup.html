@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <h1 class="title">QA Test Automator</h1>
+
+    <div class="status-bar">
+      <span class="status-dot" id="statusDot"></span>
+      <span class="status-text" id="statusText">Disconnected</span>
+    </div>
+
+    <div id="idleView" class="view">
+      <div class="input-group">
+        <label for="sessionName">Session Name</label>
+        <input type="text" id="sessionName" placeholder="e.g. login-flow">
+      </div>
+      <button id="startBtn" class="btn btn-primary">Start Recording</button>
+    </div>
+
+    <div id="recordingView" class="view hidden">
+      <div class="recording-info">
+        <span class="recording-pulse"></span>
+        <span id="recordingLabel">Recording...</span>
+      </div>
+      <div class="btn-group">
+        <button id="pauseBtn" class="btn btn-secondary">Pause</button>
+        <button id="stopBtn" class="btn btn-danger">Stop</button>
+      </div>
+    </div>
+
+    <div id="pausedView" class="view hidden">
+      <div class="recording-info">
+        <span class="paused-indicator">||</span>
+        <span>Paused</span>
+      </div>
+      <div class="btn-group">
+        <button id="resumeBtn" class="btn btn-secondary">Resume</button>
+        <button id="stopBtn2" class="btn btn-danger">Stop</button>
+      </div>
+    </div>
+
+    <div class="sessions-section" id="sessionsSection">
+      <h2>Recent Sessions</h2>
+      <div id="sessionsList" class="sessions-list"></div>
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+{
+  "name": "test-automator",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Playwright QA Test Auto-Generator - Records browser interactions and generates Playwright tests",
+  "workspaces": [
+    "shared",
+    "server",
+    "claude-agent"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "dev": "npm run dev --workspace=server",
+    "test": "npm run test --workspaces --if-present",
+    "clean": "rm -rf shared/dist server/dist claude-agent/dist"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
