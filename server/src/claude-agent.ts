@@ -24,6 +24,7 @@ import {
   restoreFromBackup,
   fileExists,
 } from '@test-automator/claude-agent';
+import { detectAppRoot, extractPort } from './app-detector';
 
 export class ClaudeAgent {
   private config: ProjectConfig;
@@ -33,10 +34,38 @@ export class ClaudeAgent {
   }
 
   /**
+   * Resolve the effective config for a session.
+   * Auto-detects the target app's root from the session URL port.
+   */
+  private resolveConfig(session: RecordingSession): ProjectConfig {
+    const url = session.startUrl || session.interactions[0]?.url;
+    if (!url) return this.config;
+
+    const port = extractPort(url);
+    if (!port) return this.config;
+
+    const detectedRoot = detectAppRoot(port);
+    if (detectedRoot) {
+      console.log(`[claude-agent] Auto-detected app root: ${detectedRoot} (port ${port})`);
+      return {
+        ...this.config,
+        projectRoot: detectedRoot,
+        playwright: {
+          ...this.config.playwright,
+          baseURL: `http://localhost:${port}`,
+        },
+      };
+    }
+
+    return this.config;
+  }
+
+  /**
    * Process a recording session: analyze interactions, plan test ID insertions,
    * compute diffs, and generate Playwright tests. Returns a preview - no files are written.
    */
   async processSession(session: RecordingSession): Promise<ProcessingResult> {
+    const config = this.resolveConfig(session);
     const errors: string[] = [];
     const warnings: string[] = [];
     const fileDiffs: FileDiff[] = [];
@@ -45,14 +74,24 @@ export class ClaudeAgent {
     const allInsertions: TestIdInsertion[] = [];
     const existingIds = new Set<string>();
 
+    console.log(`[claude-agent] Processing session "${session.name}" | projectRoot: ${config.projectRoot}`);
+
     // Group interactions by source file
     const fileGroups = this.groupBySourceFile(session.interactions);
 
-    // Build test ID insertion plan per file
+    if (fileGroups.size === 0) {
+      warnings.push(
+        'No source file locations found in interactions. ' +
+        'Test IDs will not be inserted into source files. ' +
+        'Tests will be generated using available selectors (placeholder, ID, CSS).'
+      );
+    }
+
+    // Build test ID insertion plan per file (only when source info is available)
     for (const [filePath, interactions] of fileGroups) {
       const absPath = path.isAbsolute(filePath)
         ? filePath
-        : path.join(this.config.projectRoot, filePath);
+        : path.join(config.projectRoot, filePath);
 
       if (!fileExists(absPath)) {
         warnings.push(`Source file not found: ${filePath}`);
@@ -90,7 +129,7 @@ export class ClaudeAgent {
 
           // Generate test ID
           let testId = generateTestId(
-            this.config.namingStrategy,
+            config.namingStrategy,
             interaction.element,
             source,
             interaction.type
@@ -153,12 +192,18 @@ export class ClaudeAgent {
         })),
     };
 
-    // Generate Playwright tests
+    // Always generate Playwright tests — even without source info.
+    // The generator falls back to placeholder, ID, aria, CSS selectors.
     let generatedTests: GeneratedTestFile[] = [];
     try {
-      generatedTests = generatePlaywrightTest(session, this.config, testIdMap);
+      generatedTests = generatePlaywrightTest(session, config, testIdMap);
     } catch (err) {
       errors.push(`Error generating tests: ${err}`);
+    }
+
+    // If no tests were generated (shouldn't happen), add an error
+    if (generatedTests.length === 0 && errors.length === 0) {
+      errors.push('No tests could be generated from the session interactions');
     }
 
     return {
@@ -174,16 +219,18 @@ export class ClaudeAgent {
 
   /**
    * Apply a processing result: write modified source files and generated tests to disk.
+   * Pass session to auto-detect the target app root.
    */
-  async applyResult(result: ProcessingResult): Promise<{ applied: string[]; errors: string[] }> {
+  async applyResult(result: ProcessingResult, session?: RecordingSession): Promise<{ applied: string[]; errors: string[] }> {
+    const config = session ? this.resolveConfig(session) : this.config;
     const applied: string[] = [];
     const errors: string[] = [];
 
     // Apply source file modifications (with backups)
     for (const diff of result.fileDiffs) {
       try {
-        if (this.config.backupBeforeModify) {
-          const backupPath = backupFile(diff.filePath, this.config.projectRoot);
+        if (config.backupBeforeModify) {
+          const backupPath = backupFile(diff.filePath, config.projectRoot);
           result.backupPaths.push(backupPath);
         }
         writeSourceFile(diff.filePath, diff.modified);
@@ -198,7 +245,7 @@ export class ClaudeAgent {
       try {
         const absPath = path.isAbsolute(test.filePath)
           ? test.filePath
-          : path.join(this.config.projectRoot, test.filePath);
+          : path.join(config.projectRoot, test.filePath);
         writeSourceFile(absPath, test.content);
         applied.push(absPath);
       } catch (err) {
@@ -230,6 +277,7 @@ export class ClaudeAgent {
 
   /**
    * Group interactions by their source file path.
+   * Interactions without source info are skipped (tests still generated via fallback selectors).
    */
   private groupBySourceFile(
     interactions: InteractionData[]
@@ -237,7 +285,8 @@ export class ClaudeAgent {
     const groups = new Map<string, InteractionData[]>();
 
     for (const interaction of interactions) {
-      const source = (interaction as any).source;
+      // Check both top-level source and element.source
+      const source = (interaction as any).source || (interaction.element as any)?.source;
       const filePath = source?.filePath;
 
       if (!filePath) continue;

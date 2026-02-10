@@ -36,9 +36,36 @@ export class ConfigLoader {
   private onChangeCallbacks: Array<(config: ProjectConfig) => void> = [];
 
   constructor(projectRoot?: string) {
-    const root = projectRoot || process.cwd();
+    const root = projectRoot || this.findProjectRoot();
     this.configPath = path.join(root, CONFIG_FILENAME);
     this.config = { ...DEFAULT_CONFIG, projectRoot: root };
+  }
+
+  /**
+   * Walk up from cwd to find the directory containing qa-automation.config.json
+   * or the monorepo root (package.json with workspaces). Falls back to cwd.
+   */
+  private findProjectRoot(): string {
+    let dir = process.cwd();
+    const root = path.parse(dir).root;
+
+    while (dir !== root) {
+      // Prefer the directory with the config file
+      if (fs.pathExistsSync(path.join(dir, CONFIG_FILENAME))) {
+        return dir;
+      }
+      // Also check for monorepo root (package.json with workspaces)
+      const pkgPath = path.join(dir, 'package.json');
+      if (fs.pathExistsSync(pkgPath)) {
+        try {
+          const pkg = fs.readJsonSync(pkgPath);
+          if (pkg.workspaces) return dir;
+        } catch {}
+      }
+      dir = path.dirname(dir);
+    }
+
+    return process.cwd();
   }
 
   async load(): Promise<ProjectConfig> {

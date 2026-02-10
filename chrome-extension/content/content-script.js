@@ -173,21 +173,77 @@
     document.removeEventListener('keydown', onKeydownCapture, true);
   }
 
+  // ---- Wait for server to assign session ID ----
+
+  function waitForSessionId(timeoutMs = 5000) {
+    return new Promise((resolve) => {
+      // If we already have a real session ID, return immediately
+      if (sessionId && !sessionId.startsWith('pending_')) {
+        resolve(sessionId);
+        return;
+      }
+
+      const handler = (data) => {
+        if (data.type === 'session:created' && data.sessionId) {
+          sessionId = data.sessionId;
+          ws.off('message', handler);
+          resolve(sessionId);
+        }
+      };
+      ws.on('message', handler);
+
+      // Timeout fallback
+      setTimeout(() => {
+        ws.off('message', handler);
+        resolve(sessionId);
+      }, timeoutMs);
+    });
+  }
+
   // ---- Message Handling from Extension ----
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     switch (message.action) {
+      case 'ensureConnected':
+        // Try to connect if not already connected
+        if (!ws.isConnected()) {
+          ws.connect();
+        }
+        sendResponse({ connected: ws.isConnected() });
+        break;
+
       case 'startRecording':
+        // Send session:start to server via WebSocket
+        ws.send({
+          type: 'session:start',
+          sessionName: message.sessionName || '',
+          url: message.url || window.location.href,
+          timestamp: Date.now(),
+        });
+
+        // Set a temporary session ID, will be replaced when server responds
+        sessionId = `pending_${Date.now()}`;
         recording = true;
         paused = false;
-        sessionId = message.sessionId;
         interactionCounter = 0;
         attachListeners();
         showRecordingOverlay();
-        sendResponse({ success: true });
-        break;
+
+        // Wait for real session ID from server, then respond
+        waitForSessionId().then((id) => {
+          sendResponse({ success: true, sessionId: id });
+        });
+        return true; // keep channel open for async response
 
       case 'stopRecording':
+        // Send session:stop to server
+        if (sessionId) {
+          ws.send({
+            type: 'session:stop',
+            sessionId,
+            timestamp: Date.now(),
+          });
+        }
         recording = false;
         paused = false;
         detachListeners();
@@ -196,11 +252,25 @@
         break;
 
       case 'pauseRecording':
+        if (sessionId) {
+          ws.send({
+            type: 'session:pause',
+            sessionId,
+            timestamp: Date.now(),
+          });
+        }
         paused = true;
         sendResponse({ success: true });
         break;
 
       case 'resumeRecording':
+        if (sessionId) {
+          ws.send({
+            type: 'session:resume',
+            sessionId,
+            timestamp: Date.now(),
+          });
+        }
         paused = false;
         sendResponse({ success: true });
         break;
@@ -224,6 +294,10 @@
     chrome.runtime.sendMessage({ type: 'ws:disconnected' }).catch(() => {});
   });
   ws.on('message', (data) => {
+    // Update session ID if server created session
+    if (data.type === 'session:created' && data.sessionId) {
+      sessionId = data.sessionId;
+    }
     chrome.runtime.sendMessage({ type: 'ws:message', data }).catch(() => {});
   });
 })();

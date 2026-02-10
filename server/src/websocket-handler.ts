@@ -2,12 +2,22 @@ import { WebSocket } from 'ws';
 import { ExtensionEvent, ServerAck, InteractionData } from '@test-automator/shared';
 import { SessionManager } from './session-manager';
 
+export type SessionStopCallback = (sessionId: string) => void | Promise<void>;
+
 export class WebSocketHandler {
   private clients: Set<WebSocket> = new Set();
   private sessionManager: SessionManager;
+  private onSessionStopCallbacks: SessionStopCallback[] = [];
 
   constructor(sessionManager: SessionManager) {
     this.sessionManager = sessionManager;
+  }
+
+  /**
+   * Register a callback that fires when a recording session stops.
+   */
+  onSessionStop(callback: SessionStopCallback): void {
+    this.onSessionStopCallbacks.push(callback);
   }
 
   handleConnection(ws: WebSocket): void {
@@ -102,6 +112,22 @@ export class WebSocketHandler {
       sessionId: event.sessionId,
       message: success ? 'Session stopped' : 'Session not found',
     });
+
+    // Fire auto-processing callbacks
+    if (success && event.sessionId) {
+      for (const cb of this.onSessionStopCallbacks) {
+        try {
+          const result = cb(event.sessionId);
+          if (result && typeof (result as Promise<void>).catch === 'function') {
+            (result as Promise<void>).catch((err) => {
+              console.error(`[ws-handler] onSessionStop callback error: ${err}`);
+            });
+          }
+        } catch (err) {
+          console.error(`[ws-handler] onSessionStop callback error: ${err}`);
+        }
+      }
+    }
   }
 
   private handleSessionPause(ws: WebSocket, event: ExtensionEvent): void {

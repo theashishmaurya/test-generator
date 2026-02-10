@@ -23,7 +23,10 @@ export function generatePlaywrightTest(
   config: ProjectConfig,
   testIdMap: Map<string, string> // element CSS selector -> test ID
 ): GeneratedTestFile[] {
-  const groups = groupInteractions(session.interactions);
+  // Consolidate raw interactions (merge repeated inputs, remove noise)
+  const consolidated = consolidateInteractions(session.interactions);
+
+  const groups = groupInteractions(consolidated);
   const files: GeneratedTestFile[] = [];
 
   if (groups.length === 0) {
@@ -47,6 +50,58 @@ export function generatePlaywrightTest(
   }
 
   return files;
+}
+
+/**
+ * Consolidate interactions: merge consecutive input events on the same element
+ * into a single input with the final value. Remove redundant click-before-input pairs.
+ */
+function consolidateInteractions(interactions: InteractionData[]): InteractionData[] {
+  const result: InteractionData[] = [];
+
+  for (let i = 0; i < interactions.length; i++) {
+    const current = interactions[i];
+
+    // For input/change events, find the last consecutive one on the same element
+    if (current.type === 'input' || current.type === 'change') {
+      let last = current;
+      let j = i + 1;
+      while (j < interactions.length) {
+        const next = interactions[j];
+        if (
+          (next.type === 'input' || next.type === 'change') &&
+          next.element.cssSelector === current.element.cssSelector
+        ) {
+          last = next;
+          j++;
+        } else {
+          break;
+        }
+      }
+      // Use the last event (has the final value), skip all intermediate ones
+      result.push(last);
+      i = j - 1; // skip to the last consumed event
+      continue;
+    }
+
+    // Skip click events that immediately precede an input on the same element (focus click)
+    if (current.type === 'click') {
+      const next = interactions[i + 1];
+      if (
+        next &&
+        (next.type === 'input' || next.type === 'click') &&
+        next.element.cssSelector === current.element.cssSelector &&
+        next.type === 'input'
+      ) {
+        // Skip this click — it's just focusing the input
+        continue;
+      }
+    }
+
+    result.push(current);
+  }
+
+  return result;
 }
 
 function generateSingleTestFile(
@@ -128,15 +183,19 @@ function generateTestBody(
     if (interaction.type === 'navigation' || (i === 0 && interaction.url)) {
       const url = interaction.url;
       if (url !== currentUrl) {
-        const urlObj = new URL(url);
-        // Use relative path for goto if same origin as baseURL
-        const gotoUrl = url.startsWith(config.playwright.baseURL)
-          ? urlObj.pathname
-          : url;
+        let gotoUrl: string;
+        try {
+          const urlObj = new URL(url);
+          gotoUrl = url.startsWith(config.playwright.baseURL)
+            ? urlObj.pathname
+            : url;
 
-        if (interaction.type === 'navigation' && i > 0) {
-          lines.push('');
-          lines.push(templates.comment(`Navigate to ${urlObj.pathname}`));
+          if (interaction.type === 'navigation' && i > 0) {
+            lines.push('');
+            lines.push(templates.comment(`Navigate to ${urlObj.pathname}`));
+          }
+        } catch {
+          gotoUrl = url;
         }
 
         if (i === 0) {
@@ -174,10 +233,13 @@ function generateAction(
 ): string | null {
   const { element, type, value, key } = interaction;
 
-  // Get the best selector (prefer test ID)
+  // Get the best selector (prefer test ID, then ID, then placeholder, then aria, then CSS)
   const testId =
     element.existingTestId ||
     testIdMap.get(element.cssSelector);
+
+  // Check if element has an HTML id attribute
+  const elementId = element.attributes?.['id'];
 
   switch (type) {
     case 'click':
@@ -187,6 +249,8 @@ function generateAction(
         return templates.clickByRole(element.ariaRole, element.ariaLabel);
       }
       if (element.textContent) return templates.clickByText(element.textContent);
+      if (element.innerText && element.innerText.length < 50) return templates.clickByText(element.innerText);
+      if (elementId) return templates.clickBySelector(`#${elementId}`);
       return templates.clickBySelector(element.cssSelector);
     }
 
@@ -196,15 +260,13 @@ function generateAction(
       if (!fillValue) return null;
 
       if (testId) return templates.fillByTestId(testId, fillValue);
-      if (element.ariaRole && element.ariaLabel) {
-        return templates.fillByRole(element.ariaRole, element.ariaLabel, fillValue);
-      }
       if (element.placeholder) return templates.fillByPlaceholder(element.placeholder, fillValue);
+      if (element.ariaLabel) return templates.fillByRole('textbox', element.ariaLabel, fillValue);
+      if (elementId) return templates.fillBySelector(`#${elementId}`, fillValue);
       return templates.fillBySelector(element.cssSelector, fillValue);
     }
 
     case 'submit': {
-      // Submit is usually handled by the click on submit button
       return templates.comment('Form submitted');
     }
 
@@ -261,8 +323,9 @@ function groupInteractions(interactions: InteractionData[]): InteractionGroup[] 
     }
 
     // Track source file from interaction metadata
-    if ((interaction as any).source?.filePath && !currentGroup.sourceFile) {
-      currentGroup.sourceFile = (interaction as any).source.filePath;
+    const source = (interaction as any).source || (interaction.element as any)?.source;
+    if (source?.filePath && !currentGroup.sourceFile) {
+      currentGroup.sourceFile = source.filePath;
     }
 
     currentGroup.interactions.push(interaction);
@@ -274,8 +337,12 @@ function groupInteractions(interactions: InteractionData[]): InteractionGroup[] 
 
   // Name the first group based on the URL
   if (groups.length > 0) {
-    const urlPath = new URL(groups[0].baseUrl).pathname;
-    groups[0].description = urlPath === '/' ? 'home page' : `${urlPath.slice(1)} page`;
+    try {
+      const urlPath = new URL(groups[0].baseUrl).pathname;
+      groups[0].description = urlPath === '/' ? 'home page' : `${urlPath.slice(1)} page`;
+    } catch {
+      groups[0].description = 'main page';
+    }
   }
 
   return groups;
@@ -289,7 +356,6 @@ function sanitizeName(name: string): string {
 }
 
 function formatTestFile(content: string): string {
-  // Basic formatting - could use Prettier if available
   return content
     .replace(/\n{3,}/g, '\n\n')
     .trim() + '\n';

@@ -30,6 +30,48 @@ export async function createServer(configLoader: ConfigLoader) {
     wsHandler.handleConnection(ws);
   });
 
+  // Auto-process sessions when recording stops
+  wsHandler.onSessionStop(async (sessionId) => {
+    const session = sessionManager.getSession(sessionId);
+    if (!session || session.interactions.length === 0) {
+      console.log(`[auto-process] Skipping session ${sessionId} (no interactions)`);
+      return;
+    }
+
+    console.log(`[auto-process] Auto-processing session "${session.name}" (${session.interactions.length} interactions)...`);
+
+    try {
+      sessionManager.updateStatus(sessionId, 'processing');
+      wsHandler.broadcast({ type: 'processing:started', sessionId });
+
+      const result = await agent.processSession(session);
+
+      // Auto-apply: write test files and modified source to disk
+      const applied = await agent.applyResult(result, session);
+      console.log(`[auto-process] Applied ${applied.applied.length} files for session "${session.name}"`);
+      if (applied.errors.length > 0) {
+        console.warn(`[auto-process] Apply errors:`, applied.errors);
+      }
+
+      sessionManager.updateStatus(sessionId, result.errors.length > 0 ? 'error' : 'completed');
+      wsHandler.broadcast({
+        type: 'processing:complete',
+        sessionId,
+        data: { ...result, appliedFiles: applied.applied },
+      });
+
+      console.log(`[auto-process] Done. Generated ${result.generatedTests.length} test file(s), ${result.fileDiffs.length} source diff(s).`);
+    } catch (err) {
+      console.error(`[auto-process] Error processing session ${sessionId}:`, err);
+      sessionManager.updateStatus(sessionId, 'error');
+      wsHandler.broadcast({
+        type: 'processing:error',
+        sessionId,
+        message: String(err),
+      });
+    }
+  });
+
   // REST API Routes
 
   app.get('/api/health', (_req, res) => {
@@ -127,7 +169,7 @@ export async function createServer(configLoader: ConfigLoader) {
 
     try {
       const result = await agent.processSession(session);
-      const applied = await agent.applyResult(result);
+      const applied = await agent.applyResult(result, session);
       res.json(applied);
     } catch (err) {
       res.status(500).json({ error: String(err) });

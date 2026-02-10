@@ -96,6 +96,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     if (result?.error) {
+      statusDot.className = 'status-dot';
       statusText.textContent = result.error;
       return;
     }

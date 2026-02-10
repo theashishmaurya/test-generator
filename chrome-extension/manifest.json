@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "description": "Record browser interactions and auto-generate Playwright tests with data-testid attributes",
   "permissions": ["activeTab", "scripting", "storage"],
+  "host_permissions": ["http://localhost/*", "http://127.0.0.1/*"],
   "action": {
     "default_popup": "popup/popup.html",
     "default_icon": {
